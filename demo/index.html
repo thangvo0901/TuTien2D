@@ -1,0 +1,190 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Thử Auto Tu Tiên</title>
+<style>
+  :root {
+    --bg: #0b2a21;
+    --ground: #123b2e;
+    --grid: #184a3a;
+    --fg: #e9f3ee;
+    --muted: #9fbfb2;
+    --gold: #d9a640;
+  }
+  html, body { height: 100%; margin: 0; background: var(--bg); color: var(--fg);
+    font: 14px/1.5 system-ui, sans-serif; color-scheme: dark; }
+  .wrap { padding: 16px; display: grid; gap: 12px; max-width: 960px; margin: 0 auto; }
+  h1 { margin: 0; font-size: 20px; text-wrap: balance; }
+  p { margin: 0; color: var(--muted); max-width: 65ch; }
+  canvas { width: 100%; max-width: 100%; aspect-ratio: 16 / 10; background: var(--ground);
+    border: 1px solid var(--grid); border-radius: 6px; display: block; }
+  .hud { display: flex; flex-wrap: wrap; gap: 16px; font-variant-numeric: tabular-nums; }
+  .hud b { color: var(--gold); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Thử Auto Tu Tiên</h1>
+  <p>Bản đồ giả lập để thử module auto. Bấm "Bật auto" ở bảng góc phải (hoặc phím F8).
+     Click lên bản đồ để tự di chuyển nhân vật; điểm treo máy là chỗ đứng lúc bật auto.</p>
+  <canvas id="map" width="960" height="600"></canvas>
+  <div class="hud" id="hud"></div>
+</div>
+
+<script src="../auto/tutien-auto.js"></script>
+<script>
+(function () {
+  "use strict";
+  // ---------- Game giả lập (thay bằng game thật của bạn) ----------
+  var W = 960, H = 600;
+  var rnd = function (a, b) { return a + Math.random() * (b - a); };
+  var nextId = 1;
+  var game = {
+    player: { x: W / 2, y: H / 2, hp: 100, maxHp: 100, mp: 60, maxMp: 60, speed: 2.4,
+              dest: null, cultivating: false, atkCd: 0, exp: 0 },
+    monsters: [], drops: [], potions: { hp: 15, mp: 10 }, floats: [],
+  };
+  function spawnMonster() {
+    game.monsters.push({ id: nextId++, x: rnd(40, W - 40), y: rnd(40, H - 40),
+      hp: 40, maxHp: 40, type: Math.random() < 0.1 ? "boss" : "yeu-thu", atkCd: 0 });
+  }
+  for (var i = 0; i < 7; i++) spawnMonster();
+
+  function float(x, y, text, color) { game.floats.push({ x: x, y: y, text: text, color: color, t: 50 }); }
+
+  var adapter = {
+    getPlayer: function () {
+      var p = game.player;
+      return { x: p.x, y: p.y, hp: p.hp, maxHp: p.maxHp, mp: p.mp, maxMp: p.maxMp, isDead: p.hp <= 0 };
+    },
+    getMonsters: function () {
+      return game.monsters.map(function (m) {
+        return { id: m.id, x: m.x, y: m.y, hp: m.hp, type: m.type, name: m.type };
+      });
+    },
+    attack: function (target) {
+      var p = game.player, m = game.monsters.find(function (x) { return x.id === target.id; });
+      if (!m || p.atkCd > 0) return;
+      p.atkCd = 30; p.mp = Math.max(0, p.mp - 3);
+      var dmg = Math.round(rnd(8, 14)); m.hp -= dmg; float(m.x, m.y - 18, "-" + dmg, "#ffd36b");
+    },
+    moveTo: function (x, y) { game.player.dest = { x: x, y: y }; },
+    getDroppedItems: function () { return game.drops.map(function (d) { return { id: d.id, x: d.x, y: d.y }; }); },
+    pickUp: function (item) {
+      var idx = game.drops.findIndex(function (d) { return d.id === item.id; });
+      if (idx < 0) return false;
+      var d = game.drops.splice(idx, 1)[0];
+      game.potions[d.kind]++; float(d.x, d.y - 10, "+1 " + (d.kind === "hp" ? "Hồi Huyết Đan" : "Hồi Linh Đan"), "#9be7c4");
+      return true;
+    },
+    usePotion: function (type) {
+      var p = game.player;
+      if (game.potions[type] <= 0) return false;
+      game.potions[type]--;
+      if (type === "hp") p.hp = Math.min(p.maxHp, p.hp + 45); else p.mp = Math.min(p.maxMp, p.mp + 30);
+      float(p.x, p.y - 28, type === "hp" ? "+45 máu" : "+30 linh lực", type === "hp" ? "#ff8a80" : "#80b8ff");
+      return true;
+    },
+    startCultivate: function () { game.player.cultivating = true; game.player.dest = null; },
+    stopCultivate: function () { game.player.cultivating = false; },
+    isCultivating: function () { return game.player.cultivating; },
+    revive: function () { var p = game.player; p.hp = p.maxHp; p.mp = p.maxMp; float(p.x, p.y - 28, "Hồi sinh", "#fff"); },
+  };
+
+  // ---------- Bật auto ----------
+  var auto = new TuTienAuto(adapter, { ignoreMonsterTypes: ["boss"], attackRange: 40 });
+  TuTienAuto.createPanel(auto, { storageKey: "tutien-auto-demo" });
+
+  // ---------- Vòng lặp game giả lập ----------
+  var canvas = document.getElementById("map"), ctx = canvas.getContext("2d");
+  canvas.addEventListener("click", function (e) {
+    var r = canvas.getBoundingClientRect();
+    adapter.moveTo((e.clientX - r.left) * W / r.width, (e.clientY - r.top) * H / r.height);
+    game.player.cultivating = false;
+  });
+
+  function update() {
+    var p = game.player;
+    if (p.atkCd > 0) p.atkCd--;
+    if (p.dest && p.hp > 0) {
+      var dx = p.dest.x - p.x, dy = p.dest.y - p.y, d = Math.hypot(dx, dy);
+      if (d < p.speed) { p.x = p.dest.x; p.y = p.dest.y; p.dest = null; }
+      else { p.x += dx / d * p.speed; p.y += dy / d * p.speed; }
+    }
+    if (p.cultivating) { p.exp += 0.05; p.mp = Math.min(p.maxMp, p.mp + 0.05); }
+    game.monsters.forEach(function (m) {
+      if (m.atkCd > 0) m.atkCd--;
+      if (Math.hypot(m.x - p.x, m.y - p.y) < 50 && m.atkCd === 0 && p.hp > 0) {
+        m.atkCd = 45; var dmg = m.type === "boss" ? 20 : Math.round(rnd(3, 7));
+        p.hp = Math.max(0, p.hp - dmg); float(p.x, p.y - 22, "-" + dmg, "#ff6b6b");
+      }
+    });
+    game.monsters = game.monsters.filter(function (m) {
+      if (m.hp > 0) return true;
+      p.exp += 10;
+      if (Math.random() < 0.6) game.drops.push({ id: nextId++, x: m.x + rnd(-10, 10), y: m.y + rnd(-10, 10),
+        kind: Math.random() < 0.6 ? "hp" : "mp" });
+      setTimeout(spawnMonster, 2500);
+      return false;
+    });
+    game.floats.forEach(function (f) { f.y -= 0.6; f.t--; });
+    game.floats = game.floats.filter(function (f) { return f.t > 0; });
+  }
+
+  function bar(x, y, w, v, color) {
+    ctx.fillStyle = "#00000088"; ctx.fillRect(x - w / 2, y, w, 4);
+    ctx.fillStyle = color; ctx.fillRect(x - w / 2, y, w * Math.max(0, v), 4);
+  }
+
+  function draw() {
+    ctx.clearRect(0, 0, W, H);
+    ctx.strokeStyle = "#184a3a"; ctx.lineWidth = 1;
+    for (var x = 0; x < W; x += 40) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke(); }
+    for (var y = 0; y < H; y += 40) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke(); }
+    if (auto.running && auto.anchor) {
+      ctx.strokeStyle = "#d9a64066"; ctx.setLineDash([6, 6]);
+      ctx.beginPath(); ctx.arc(auto.anchor.x, auto.anchor.y, auto.config.searchRadius, 0, Math.PI * 2); ctx.stroke();
+      ctx.setLineDash([]);
+    }
+    game.drops.forEach(function (d) {
+      ctx.fillStyle = d.kind === "hp" ? "#ff8a80" : "#80b8ff";
+      ctx.beginPath(); ctx.arc(d.x, d.y, 5, 0, Math.PI * 2); ctx.fill();
+    });
+    game.monsters.forEach(function (m) {
+      var boss = m.type === "boss";
+      ctx.fillStyle = boss ? "#b34ad6" : "#c0463b";
+      ctx.fillRect(m.x - (boss ? 14 : 10), m.y - (boss ? 14 : 10), boss ? 28 : 20, boss ? 28 : 20);
+      bar(m.x, m.y - 20, 24, m.hp / m.maxHp, "#ff6b6b");
+      if (auto.target && auto.target.id === m.id) {
+        ctx.strokeStyle = "#ffd36b"; ctx.lineWidth = 2; ctx.strokeRect(m.x - 15, m.y - 15, 30, 30); ctx.lineWidth = 1;
+      }
+    });
+    var p = game.player;
+    if (p.cultivating) {
+      ctx.fillStyle = "#d9a64033"; ctx.beginPath(); ctx.arc(p.x, p.y, 22 + Math.sin(Date.now() / 200) * 3, 0, Math.PI * 2); ctx.fill();
+    }
+    ctx.fillStyle = p.hp > 0 ? "#e9f3ee" : "#666";
+    ctx.beginPath(); ctx.arc(p.x, p.y, 11, 0, Math.PI * 2); ctx.fill();
+    bar(p.x, p.y - 22, 30, p.hp / p.maxHp, "#ff6b6b");
+    bar(p.x, p.y - 16, 30, p.mp / p.maxMp, "#80b8ff");
+    ctx.font = "12px system-ui, sans-serif"; ctx.textAlign = "center";
+    game.floats.forEach(function (f) { ctx.fillStyle = f.color; ctx.fillText(f.text, f.x, f.y); });
+  }
+
+  var hud = document.getElementById("hud");
+  function renderHud() {
+    var p = game.player;
+    hud.innerHTML = "<span>Máu <b>" + Math.round(p.hp) + "/" + p.maxHp + "</b></span>" +
+      "<span>Linh lực <b>" + Math.round(p.mp) + "/" + p.maxMp + "</b></span>" +
+      "<span>Tu vi <b>" + Math.floor(p.exp) + "</b></span>" +
+      "<span>Hồi Huyết Đan <b>" + game.potions.hp + "</b></span>" +
+      "<span>Hồi Linh Đan <b>" + game.potions.mp + "</b></span>";
+  }
+
+  (function loop() { update(); draw(); renderHud(); requestAnimationFrame(loop); })();
+})();
+</script>
+</body>
+</html>
